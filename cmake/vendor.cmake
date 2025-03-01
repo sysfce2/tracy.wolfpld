@@ -24,7 +24,31 @@ else()
     CPMAddPackage(
         NAME capstone
         GITHUB_REPOSITORY capstone-engine/capstone
-        GIT_TAG 5.0.1
+        GIT_TAG 6.0.0-Alpha1
+        OPTIONS
+            "CAPSTONE_X86_ATT_DISABLE ON"
+            "CAPSTONE_ALPHA_SUPPORT OFF"
+            "CAPSTONE_HPPA_SUPPORT OFF"
+            "CAPSTONE_LOONGARCH_SUPPORT OFF"
+            "CAPSTONE_M680X_SUPPORT OFF"
+            "CAPSTONE_M68K_SUPPORT OFF"
+            "CAPSTONE_MIPS_SUPPORT OFF"
+            "CAPSTONE_MOS65XX_SUPPORT OFF"
+            "CAPSTONE_PPC_SUPPORT OFF"
+            "CAPSTONE_SPARC_SUPPORT OFF"
+            "CAPSTONE_SYSTEMZ_SUPPORT OFF"
+            "CAPSTONE_XCORE_SUPPORT OFF"
+            "CAPSTONE_TRICORE_SUPPORT OFF"
+            "CAPSTONE_TMS320C64X_SUPPORT OFF"
+            "CAPSTONE_M680X_SUPPORT OFF"
+            "CAPSTONE_EVM_SUPPORT OFF"
+            "CAPSTONE_WASM_SUPPORT OFF"
+            "CAPSTONE_BPF_SUPPORT OFF"
+            "CAPSTONE_RISCV_SUPPORT OFF"
+            "CAPSTONE_SH_SUPPORT OFF"
+            "CAPSTONE_XTENSA_SUPPORT OFF"
+            "CAPSTONE_BUILD_MACOS_THIN ON"
+        EXCLUDE_FROM_ALL TRUE
     )
     add_library(TracyCapstone INTERFACE)
     target_include_directories(TracyCapstone INTERFACE ${capstone_SOURCE_DIR}/include/capstone)
@@ -49,6 +73,7 @@ if(NOT USE_WAYLAND AND NOT EMSCRIPTEN)
                 "GLFW_BUILD_TESTS OFF"
                 "GLFW_BUILD_DOCS OFF"
                 "GLFW_INSTALL OFF"
+            EXCLUDE_FROM_ALL TRUE
         )
         add_library(TracyGlfw3 INTERFACE)
         target_link_libraries(TracyGlfw3 INTERFACE glfw)
@@ -66,59 +91,27 @@ else()
     CPMAddPackage(
         NAME freetype
         GITHUB_REPOSITORY freetype/freetype
-        GIT_TAG VER-2-13-2
+        GIT_TAG VER-2-13-3
         OPTIONS
             "FT_DISABLE_HARFBUZZ ON"
             "FT_WITH_HARFBUZZ OFF"
+        EXCLUDE_FROM_ALL TRUE
     )
     add_library(TracyFreetype INTERFACE)
     target_link_libraries(TracyFreetype INTERFACE freetype)
 endif()
 
-# zstd
+# Zstd
 
-set(ZSTD_DIR "${ROOT_DIR}/zstd")
-
-set(ZSTD_SOURCES
-    decompress/zstd_ddict.c
-    decompress/zstd_decompress_block.c
-    decompress/huf_decompress.c
-    decompress/zstd_decompress.c
-    common/zstd_common.c
-    common/error_private.c
-    common/xxhash.c
-    common/entropy_common.c
-    common/debug.c
-    common/threading.c
-    common/pool.c
-    common/fse_decompress.c
-    compress/zstd_ldm.c
-    compress/zstd_compress_superblock.c
-    compress/zstd_opt.c
-    compress/zstd_compress_sequences.c
-    compress/fse_compress.c
-    compress/zstd_double_fast.c
-    compress/zstd_compress.c
-    compress/zstd_compress_literals.c
-    compress/hist.c
-    compress/zstdmt_compress.c
-    compress/zstd_lazy.c
-    compress/huf_compress.c
-    compress/zstd_fast.c
-    dictBuilder/zdict.c
-    dictBuilder/cover.c
-    dictBuilder/divsufsort.c
-    dictBuilder/fastcover.c
+CPMAddPackage(
+    NAME zstd
+    GITHUB_REPOSITORY facebook/zstd
+    GIT_TAG v1.5.7
+    OPTIONS
+        "ZSTD_BUILD_SHARED OFF"
+    EXCLUDE_FROM_ALL TRUE
+    SOURCE_SUBDIR build/cmake
 )
-
-list(TRANSFORM ZSTD_SOURCES PREPEND "${ZSTD_DIR}/")
-
-set_property(SOURCE ${ZSTD_DIR}/decompress/huf_decompress_amd64.S APPEND PROPERTY COMPILE_OPTIONS "-x" "assembler-with-cpp")
-
-add_library(TracyZstd STATIC ${ZSTD_SOURCES})
-target_include_directories(TracyZstd PUBLIC ${ZSTD_DIR})
-target_compile_definitions(TracyZstd PRIVATE ZSTD_DISABLE_ASM)
-
 
 # Diff Template Library
 
@@ -134,13 +127,21 @@ target_include_directories(TracyDtl INTERFACE ${DTL_DIR})
 set(GETOPT_DIR "${ROOT_DIR}/getopt")
 set(GETOPT_SOURCES ${GETOPT_DIR}/getopt.c)
 set(GETOPT_HEADERS ${GETOPT_DIR}/getopt.h)
-add_library(TracyGetOpt STATIC ${GETOPT_SOURCES} ${GETOPT_HEADERS})
+add_library(TracyGetOpt STATIC EXCLUDE_FROM_ALL ${GETOPT_SOURCES} ${GETOPT_HEADERS})
 target_include_directories(TracyGetOpt PUBLIC ${GETOPT_DIR})
 
 
 # ImGui
 
-set(IMGUI_DIR "${ROOT_DIR}/imgui")
+CPMAddPackage(
+    NAME ImGui
+    GITHUB_REPOSITORY ocornut/imgui
+    GIT_TAG v1.91.8-docking
+    DOWNLOAD_ONLY TRUE
+    PATCHES
+        "${CMAKE_CURRENT_LIST_DIR}/imgui-emscripten.patch"
+        "${CMAKE_CURRENT_LIST_DIR}/imgui-loader.patch"
+)
 
 set(IMGUI_SOURCES
     imgui_widgets.cpp
@@ -149,15 +150,19 @@ set(IMGUI_SOURCES
     imgui.cpp
     imgui_tables.cpp
     misc/freetype/imgui_freetype.cpp
+    backends/imgui_impl_opengl3.cpp
 )
 
-list(TRANSFORM IMGUI_SOURCES PREPEND "${IMGUI_DIR}/")
+list(TRANSFORM IMGUI_SOURCES PREPEND "${ImGui_SOURCE_DIR}/")
 
-add_definitions(-DIMGUI_ENABLE_FREETYPE)
-
-add_library(TracyImGui STATIC ${IMGUI_SOURCES})
-target_include_directories(TracyImGui PUBLIC ${IMGUI_DIR})
+add_library(TracyImGui STATIC EXCLUDE_FROM_ALL ${IMGUI_SOURCES})
+target_include_directories(TracyImGui PUBLIC ${ImGui_SOURCE_DIR})
 target_link_libraries(TracyImGui PUBLIC TracyFreetype)
+target_compile_definitions(TracyImGui PRIVATE "IMGUI_ENABLE_FREETYPE")
+
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_definitions(TracyImGui PRIVATE "IMGUI_DISABLE_DEBUG_TOOLS")
+endif()
 
 # NFD
 
@@ -177,7 +182,7 @@ if (NOT NO_FILESELECTOR AND NOT EMSCRIPTEN)
     endif()
 
     file(GLOB_RECURSE NFD_HEADERS CONFIGURE_DEPENDS RELATIVE ${NFD_DIR} "*.h")
-    add_library(TracyNfd STATIC ${NFD_SOURCES} ${NFD_HEADERS})
+    add_library(TracyNfd STATIC EXCLUDE_FROM_ALL ${NFD_SOURCES} ${NFD_HEADERS})
     target_include_directories(TracyNfd PUBLIC ${NFD_DIR})
 
     if (APPLE)
@@ -188,7 +193,7 @@ if (NOT NO_FILESELECTOR AND NOT EMSCRIPTEN)
         if (GTK_FILESELECTOR)
             pkg_check_modules(GTK3 gtk+-3.0)
             if (NOT GTK3_FOUND)
-                message(FATAL_ERROR "GTK3 not found. Please install it or set TRACY_GTK_FILESELECTOR to OFF.")
+                message(FATAL_ERROR "GTK3 not found. Please install it or set GTK_FILESELECTOR to OFF.")
             endif()
             add_library(TracyGtk3 INTERFACE)
             target_include_directories(TracyGtk3 INTERFACE ${GTK3_INCLUDE_DIRS})
@@ -197,7 +202,7 @@ if (NOT NO_FILESELECTOR AND NOT EMSCRIPTEN)
         else()
             pkg_check_modules(DBUS dbus-1)
             if (NOT DBUS_FOUND)
-                message(FATAL_ERROR "D-Bus not found. Please install it or set TRACY_GTK_FILESELECTOR to ON.")
+                message(FATAL_ERROR "D-Bus not found. Please install it or set GTK_FILESELECTOR to ON.")
             endif()
             add_library(TracyDbus INTERFACE)
             target_include_directories(TracyDbus INTERFACE ${DBUS_INCLUDE_DIRS})
@@ -207,28 +212,11 @@ if (NOT NO_FILESELECTOR AND NOT EMSCRIPTEN)
     endif()
 endif()
 
-# TBB
+# PPQSort
 
-if (UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
-    # Tracy does not use TBB directly, but the implementation of parallel algorithms
-    # in some versions of libstdc++ depends on TBB. When it does, you must
-    # explicitly link against -ltbb.
-    #
-    # Some distributions have pgk-config files for TBB, others don't.
-
-    pkg_check_modules(TBB tbb)
-    if (TBB_FOUND)
-        add_library(TracyTbb INTERFACE)
-        target_include_directories(TracyTbb INTERFACE ${TBB_INCLUDE_DIRS})
-        target_link_libraries(TracyTbb INTERFACE ${TBB_LINK_LIBRARIES})
-    else()
-        CPMAddPackage(
-            NAME tbb
-            GITHUB_REPOSITORY oneapi-src/oneTBB
-            GIT_TAG v2021.12.0-rc2
-            OPTIONS "TBB_TEST OFF"
-        )
-        add_library(TracyTbb INTERFACE)
-        target_link_libraries(TracyTbb INTERFACE tbb)
-    endif()
-endif()
+CPMAddPackage(
+    NAME PPQSort
+    GITHUB_REPOSITORY GabTux/PPQSort
+    VERSION 1.0.4
+    EXCLUDE_FROM_ALL TRUE
+)

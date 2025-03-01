@@ -35,7 +35,7 @@ namespace tracy
 
 double s_time = 0;
 
-View::View( void(*cbMainThread)(const std::function<void()>&, bool), const char* addr, uint16_t port, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb, SetScaleCallback sscb, AttentionCallback acb, const Config& config )
+View::View( void(*cbMainThread)(const std::function<void()>&, bool), const char* addr, uint16_t port, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb, SetScaleCallback sscb, AttentionCallback acb, const Config& config, AchievementsMgr* amgr )
     : m_worker( addr, port, config.memoryLimit == 0 ? -1 : ( config.memoryLimitPercent * tracy::GetPhysicalMemorySize() / 100 ) )
     , m_staticView( false )
     , m_viewMode( ViewMode::LastFrames )
@@ -53,15 +53,22 @@ View::View( void(*cbMainThread)(const std::function<void()>&, bool), const char*
     , m_stcb( stcb )
     , m_sscb( sscb )
     , m_acb( acb )
-    , m_userData()
     , m_cbMainThread( cbMainThread )
+    , m_achievementsMgr( amgr )
+    , m_achievements( config.achievements )
+    , m_horizontalScrollMultiplier( config.horizontalScrollMultiplier )
+    , m_verticalScrollMultiplier( config.verticalScrollMultiplier )
+#ifdef __EMSCRIPTEN__
+    , m_td( 2, "ViewMt" )
+#else
+    , m_td( std::thread::hardware_concurrency(), "ViewMt" )
+#endif
 {
     InitTextEditor();
-
-    m_vd.frameTarget = config.targetFps;
+    SetupConfig( config );
 }
 
-View::View( void(*cbMainThread)(const std::function<void()>&, bool), FileRead& f, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb, SetScaleCallback sscb, AttentionCallback acb, const Config& config )
+View::View( void(*cbMainThread)(const std::function<void()>&, bool), FileRead& f, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb, SetScaleCallback sscb, AttentionCallback acb, const Config& config, AchievementsMgr* amgr )
     : m_worker( f )
     , m_filename( f.GetFilename() )
     , m_staticView( true )
@@ -78,11 +85,22 @@ View::View( void(*cbMainThread)(const std::function<void()>&, bool), FileRead& f
     , m_acb( acb )
     , m_userData( m_worker.GetCaptureProgram().c_str(), m_worker.GetCaptureTime() )
     , m_cbMainThread( cbMainThread )
+    , m_achievementsMgr( amgr )
+    , m_achievements( config.achievements )
+    , m_horizontalScrollMultiplier( config.horizontalScrollMultiplier )
+    , m_verticalScrollMultiplier( config.verticalScrollMultiplier )
+#ifdef __EMSCRIPTEN__
+    , m_td( 2, "ViewMt" )
+#else
+    , m_td( std::thread::hardware_concurrency(), "ViewMt" )
+#endif
 {
     m_notificationTime = 4;
     m_notificationText = std::string( "Trace loaded in " ) + TimeToString( m_worker.GetLoadTime() );
 
     InitTextEditor();
+    SetupConfig( config );
+
     m_vd.zvStart = m_worker.GetFirstTime();
     m_vd.zvEnd = m_worker.GetLastTime();
     m_userData.StateShouldBePreserved();
@@ -93,7 +111,7 @@ View::View( void(*cbMainThread)(const std::function<void()>&, bool), FileRead& f
     if( m_worker.GetCallstackFrameCount() == 0 ) m_showUnknownFrames = false;
     if( m_worker.GetCallstackSampleCount() == 0 ) m_showAllSymbols = true;
 
-    m_vd.frameTarget = config.targetFps;
+    Achieve( "loadTrace" );
 }
 
 View::~View()
@@ -115,6 +133,20 @@ void View::InitTextEditor()
 {
     m_sourceView = std::make_unique<SourceView>();
     m_sourceViewFile = nullptr;
+}
+
+void View::SetupConfig( const Config& config )
+{
+    m_vd.frameTarget = config.targetFps;
+    m_vd.dynamicColors = config.dynamicColors;
+    m_vd.forceColors = config.forceColors;
+    m_vd.shortenName = (ShortenName)config.shortenName;
+}
+
+void View::Achieve( const char* id )
+{
+    if( !m_achievements || !m_achievementsMgr ) return;
+    m_achievementsMgr->Achieve( id );
 }
 
 void View::ViewSource( const char* fileName, int line )
@@ -537,6 +569,11 @@ bool View::Draw()
         ImGui::EndPopup();
     }
 
+    static FileCompression comp = FileCompression::Zstd;
+    static int zlvl = 3;
+    static bool buildDict = false;
+    static int streams = 4;
+
     bool saveFailed = false;
     if( !m_filenameStaging.empty() )
     {
@@ -551,46 +588,53 @@ bool View::Draw()
         ImGui::PopFont();
         ImGui::Separator();
 
-        static FileWrite::Compression comp = FileWrite::Compression::Fast;
-        static int zlvl = 6;
-        ImGui::TextUnformatted( ICON_FA_FILE_ZIPPER " Trace compression" );
-        ImGui::SameLine();
-        TextDisabledUnformatted( "Can be changed later with the upgrade utility" );
-        ImGui::Indent();
-        int idx = 0;
-        while( CompressionName[idx] )
+        if( ImGui::TreeNode( ICON_FA_FILE_ZIPPER " Trace compression" ) )
         {
-            if( ImGui::RadioButton( CompressionName[idx], (int)comp == idx ) ) comp = (FileWrite::Compression)idx;
+            TextDisabledUnformatted( "Can be changed later with the upgrade utility" );
+            ImGui::Indent();
+            int idx = 0;
+            while( CompressionName[idx] )
+            {
+                if( ImGui::RadioButton( CompressionName[idx], (int)comp == idx ) ) comp = (FileCompression)idx;
+                ImGui::SameLine();
+                TextDisabledUnformatted( CompressionDesc[idx] );
+                idx++;
+            }
+            ImGui::Unindent();
+            ImGui::TextUnformatted( "Zstd level" );
             ImGui::SameLine();
-            TextDisabledUnformatted( CompressionDesc[idx] );
-            idx++;
-        }
-        ImGui::Unindent();
-        ImGui::TextUnformatted( "Zstd level" );
-        ImGui::SameLine();
-        TextDisabledUnformatted( "Increasing level decreases file size, but increases save and load times" );
-        ImGui::Indent();
-        if( ImGui::SliderInt( "##zstd", &zlvl, 1, 22, "%d", ImGuiSliderFlags_AlwaysClamp ) )
-        {
-            comp = FileWrite::Compression::Zstd;
-        }
-        ImGui::Unindent();
+            TextDisabledUnformatted( "Increasing level decreases file size, but increases save and load times" );
+            ImGui::Indent();
+            if( ImGui::SliderInt( "##zstd", &zlvl, 1, 22, "%d", ImGuiSliderFlags_AlwaysClamp ) )
+            {
+                comp = FileCompression::Zstd;
+            }
+            ImGui::Unindent();
 
-        static bool buildDict = false;
-        if( m_worker.GetFrameImageCount() != 0 )
-        {
-            ImGui::Separator();
-            ImGui::Checkbox( "Build frame images dictionary", &buildDict );
+            ImGui::TextUnformatted( ICON_FA_SHUFFLE " Compression streams" );
             ImGui::SameLine();
-            TextDisabledUnformatted( "Decreases run-time memory requirements" );
+            TextDisabledUnformatted( "Parallelize save and load at the cost of file size" );
+            ImGui::Indent();
+            ImGui::SliderInt( "##streams", &streams, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp );
+            ImGui::Unindent();
+
+            if( m_worker.GetFrameImageCount() != 0 )
+            {
+                ImGui::Separator();
+                ImGui::Checkbox( "Build frame images dictionary", &buildDict );
+                ImGui::SameLine();
+                TextDisabledUnformatted( "Decreases run-time memory requirements" );
+            }
+            ImGui::TreePop();
         }
 
         ImGui::Separator();
         if( ImGui::Button( ICON_FA_FLOPPY_DISK " Save trace" ) )
         {
-            saveFailed = !Save( fn, comp, zlvl, buildDict );
+            saveFailed = !Save( fn, comp, zlvl, buildDict, streams );
             m_filenameStaging.clear();
             ImGui::CloseCurrentPopup();
+            Achieve( "saveTrace" );
         }
         ImGui::SameLine();
         if( ImGui::Button( "Cancel" ) )
@@ -652,6 +696,15 @@ bool View::DrawImpl()
         return keepOpen;
     }
 
+    if( m_achievements )
+    {
+        if( m_worker.IsConnected() ) Achieve( "connectToClient" );
+        if( m_worker.GetZoneCount() > 0 ) Achieve( "instrumentationIntro" );
+        if( m_worker.GetZoneCount() > 100 * 1000 * 1000 ) Achieve( "100million" );
+        if( m_worker.GetCallstackSampleCount() > 0 ) Achieve( "samplingIntro" );
+        if( m_worker.AreFramesUsed() ) Achieve( "instrumentFrames" );
+    }
+
     Attention( m_attnWorking );
 
     if( !m_uarchSet )
@@ -671,6 +724,24 @@ bool View::DrawImpl()
         sprintf( buf, "Trace size %s (%.2f%% ratio)", MemSizeToString( dst ), 100.f * dst / src );
         m_notificationText = buf;
         m_acb();
+    }
+
+    auto& threadHints = m_worker.GetPendingThreadHints();
+    if( !threadHints.empty() )
+    {
+        m_threadReinsert.reserve( threadHints.size()  );
+        for( auto v : threadHints )
+        {
+            auto it = std::find_if( m_threadOrder.begin(), m_threadOrder.end(), [v]( const auto& t ) { return t->id == v; } );
+            if( it != m_threadOrder.end() )
+            {
+                // Will be reinserted in the correct place later.
+                // A separate list is kept of threads that were already known to avoid having to figure out which one is missing in m_threadOrder.
+                m_threadReinsert.push_back( *it );
+                m_threadOrder.erase( it );
+            }
+        }
+        m_worker.ClearPendingThreadHints();
     }
 
     const auto& io = ImGui::GetIO();
@@ -825,13 +896,15 @@ bool View::DrawImpl()
         ImGui::PopStyleColor( 3 );
     }
     ImGui::SameLine();
-    ToggleButton( ICON_FA_GEAR " Options", m_showOptions );
+    ToggleButton( ICON_FA_GEAR, m_showOptions );
     ImGui::SameLine();
     ToggleButton( ICON_FA_TAGS " Messages", m_showMessages );
     ImGui::SameLine();
-    ToggleButton( ICON_FA_MAGNIFYING_GLASS " Find zone", m_findZone.show );
+    ToggleButton( ICON_FA_MAGNIFYING_GLASS " Find", m_findZone.show );
     ImGui::SameLine();
     ToggleButton( ICON_FA_ARROW_UP_WIDE_SHORT " Statistics", m_showStatistics );
+    ImGui::SameLine();
+    ToggleButton( ICON_FA_FIRE_FLAME_CURVED " Flame", m_showFlameGraph );
     ImGui::SameLine();
     ToggleButton( ICON_FA_MEMORY " Memory", m_memInfo.show );
     ImGui::SameLine();
@@ -1025,7 +1098,7 @@ bool View::DrawImpl()
     DrawFrames();
 
     const auto dockspaceId = ImGui::GetID( "tracyDockspace" );
-    ImGui::DockSpace( dockspaceId, ImVec2( 0, 0 ), ImGuiDockNodeFlags_NoDockingInCentralNode );
+    ImGui::DockSpace( dockspaceId, ImVec2( 0, 0 ), ImGuiDockNodeFlags_NoDockingOverCentralNode );
     if( ImGuiDockNode* node = ImGui::DockBuilderGetCentralNode( dockspaceId ) )
     {
         node->LocalFlags |= ImGuiDockNodeFlags_NoTabBar;
@@ -1059,6 +1132,7 @@ bool View::DrawImpl()
 
     if( m_showOptions ) DrawOptions();
     if( m_showMessages ) DrawMessages();
+    if( m_showFlameGraph ) DrawFlameGraph();
     if( m_findZone.show ) DrawFindZone();
     if( m_showStatistics ) DrawStatistics();
     if( m_memInfo.show ) DrawMemory();
@@ -1340,9 +1414,9 @@ void View::DrawSourceTooltip( const char* filename, uint32_t srcline, int before
     ImGui::PopStyleVar();
 }
 
-bool View::Save( const char* fn, FileWrite::Compression comp, int zlevel, bool buildDict )
+bool View::Save( const char* fn, FileCompression comp, int zlevel, bool buildDict, int streams )
 {
-    std::unique_ptr<FileWrite> f( FileWrite::Open( fn, comp, zlevel ) );
+    std::unique_ptr<FileWrite> f( FileWrite::Open( fn, comp, zlevel, streams ) );
     if( !f ) return false;
 
     m_userData.StateShouldBePreserved();

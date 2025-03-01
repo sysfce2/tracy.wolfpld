@@ -69,6 +69,8 @@ void View::DrawPlayback()
 
     if( !m_playback.pause )
     {
+        Achieve( "frameImages" );
+
         auto time = ImGui::GetIO().DeltaTime * m_playback.speed;
         while( !m_playback.pause && time > 0 )
         {
@@ -113,7 +115,7 @@ void View::DrawPlayback()
         changed = true;
     }
     changed |= ImGui::SliderInt( "Frame image", &tmp, 1, ficnt, "%d" );
-    ImGui::SetItemUsingMouseWheel();
+    ImGui::SetItemKeyOwner( ImGuiKey_MouseWheelY );
     if( wheel && ImGui::IsItemHovered() )
     {
         if( ImGui::IsItemActive() )
